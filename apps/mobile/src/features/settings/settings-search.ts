@@ -100,6 +100,7 @@ const SETTINGS_SEARCH_TERMS = {
     "resource monitor",
     "cpu",
     "memory",
+    "gpu",
     "process tree",
     "workload",
     "crash log",

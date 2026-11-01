@@ -59,6 +59,60 @@ describe("ResourceMonitorModel", () => {
     expect(ResourceMonitorModel.t3MemoryPercentOfHost(8 * 1024 * 1024 * 1024, host)).toBe(50);
     expect(ResourceMonitorModel.hostCpuPercent({ ...host, cpuUtilization: null })).toBeNull();
     expect(ResourceMonitorModel.hostMemoryUsedPercent({ ...host, totalMemoryBytes: 0 })).toBeNull();
+    expect(ResourceMonitorModel.hostGpus(host)).toEqual([]);
+    expect(ResourceMonitorModel.hostGpus(null)).toEqual([]);
+  });
+
+  it("formats GPU load without inventing a 0% sample", () => {
+    const gpu = {
+      name: "NVIDIA GeForce RTX 4090",
+      utilization: 0.452,
+      memoryUsedBytes: 10 * 1024 * 1024 * 1024,
+      memoryTotalBytes: 24 * 1024 * 1024 * 1024,
+    };
+    expect(ResourceMonitorModel.formatGpuName(gpu.name)).toBe("RTX 4090");
+    expect(ResourceMonitorModel.gpuUtilizationPercent(gpu)).toBeCloseTo(45.2);
+    expect(ResourceMonitorModel.gpuMemoryUsedPercent(gpu)).toBeCloseTo((10 / 24) * 100);
+    expect(ResourceMonitorModel.gpuMemoryDetail(gpu)).toBe("10.0 GB / 24.0 GB");
+    expect(ResourceMonitorModel.loadTone(45.2)).toBe("ok");
+    expect(ResourceMonitorModel.loadTone(70)).toBe("warn");
+    expect(ResourceMonitorModel.loadTone(90)).toBe("crit");
+    expect(ResourceMonitorModel.gpuUtilizationPercent({ ...gpu, utilization: null })).toBeNull();
+    expect(
+      ResourceMonitorModel.gpuMemoryUsedPercent({
+        ...gpu,
+        memoryUsedBytes: null,
+        memoryTotalBytes: null,
+      }),
+    ).toBeNull();
+    expect(
+      ResourceMonitorModel.gpuMemoryDetail({
+        ...gpu,
+        memoryUsedBytes: null,
+        memoryTotalBytes: null,
+      }),
+    ).toBe("Unavailable");
+    expect(
+      ResourceMonitorModel.gpuGaugeLabels([gpu]).map((label) => [label.util, label.memory]),
+    ).toEqual([["GPU util", "GPU memory"]]);
+    expect(
+      ResourceMonitorModel.gpuGaugeLabels([gpu, { ...gpu, name: "Radeon RX 7900 XTX" }]).map(
+        (label) => [label.util, label.memory],
+      ),
+    ).toEqual([
+      ["RTX 4090 util", "RTX 4090 memory"],
+      ["Radeon RX 7900 XTX util", "Radeon RX 7900 XTX memory"],
+    ]);
+    expect(
+      ResourceMonitorModel.hostGpus({
+        sampledAt: 1,
+        cpuUtilization: 0.1,
+        cpuCount: 8,
+        availableMemoryBytes: 1,
+        totalMemoryBytes: 2,
+        gpus: [gpu],
+      }),
+    ).toEqual([gpu]);
   });
 
   it("scales history charts and reports memory peaks", () => {

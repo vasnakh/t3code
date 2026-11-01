@@ -379,6 +379,80 @@ describe("ResourceMonitorSection", () => {
     expect(rendered.container.querySelector(`[aria-label="Expand codex"]`)).not.toBeNull();
   });
 
+  it("shows a no-GPU state instead of 0% gauges when the host omits gpus", () => {
+    const rendered = renderSection();
+    root = rendered.root;
+
+    expect(rendered.container.textContent).toContain("GPU not detected / not supported");
+    expect(rendered.container.textContent).toContain("This host did not report a GPU sample.");
+    expect(rendered.container.textContent).not.toContain("GPU util");
+    expect(rendered.container.textContent).not.toContain("GPU memory");
+    expect(rendered.container.textContent).toContain("42.0%");
+    expect(rendered.container.querySelector(`[aria-label="GPU util 0.0%"]`)).toBeNull();
+    expect(rendered.container.querySelector(`[aria-label="GPU memory 0.0%"]`)).toBeNull();
+  });
+
+  it("renders one GPU as utilization and memory gauges", () => {
+    mocks.queries.set(
+      "host",
+      query({
+        ...hostSnapshot(),
+        gpus: [
+          {
+            name: "NVIDIA GeForce RTX 4090",
+            utilization: 0.452,
+            memoryUsedBytes: 10 * 1024 * 1024 * 1024,
+            memoryTotalBytes: 24 * 1024 * 1024 * 1024,
+          },
+        ],
+      }),
+    );
+    const rendered = renderSection();
+    root = rendered.root;
+
+    expect(rendered.container.textContent).toContain("GPU util");
+    expect(rendered.container.textContent).toContain("GPU memory");
+    expect(rendered.container.textContent).toContain("NVIDIA GeForce RTX 4090");
+    expect(rendered.container.textContent).toContain("45.2%");
+    expect(rendered.container.textContent).toContain("10.0 GB / 24.0 GB");
+    expect(rendered.container.textContent).not.toContain("GPU not detected / not supported");
+  });
+
+  it("renders a util and memory gauge for each of two GPUs", () => {
+    mocks.queries.set(
+      "host",
+      query({
+        ...hostSnapshot(),
+        gpus: [
+          {
+            name: "NVIDIA GeForce RTX 4090",
+            utilization: 0.12,
+            memoryUsedBytes: 1024 * 1024 * 1024,
+            memoryTotalBytes: 24 * 1024 * 1024 * 1024,
+          },
+          {
+            name: "Radeon RX 7900 XTX",
+            utilization: 0.91,
+            memoryUsedBytes: 16 * 1024 * 1024 * 1024,
+            memoryTotalBytes: 20 * 1024 * 1024 * 1024,
+          },
+        ],
+      }),
+    );
+    const rendered = renderSection();
+    root = rendered.root;
+
+    expect(rendered.container.textContent).toContain("RTX 4090 util");
+    expect(rendered.container.textContent).toContain("RTX 4090 memory");
+    expect(rendered.container.textContent).toContain("Radeon RX 7900 XTX util");
+    expect(rendered.container.textContent).toContain("Radeon RX 7900 XTX memory");
+    expect(rendered.container.textContent).toContain("12.0%");
+    expect(rendered.container.textContent).toContain("91.0%");
+    expect(rendered.container.textContent).toContain("1.00 GB / 24.0 GB");
+    expect(rendered.container.textContent).toContain("16.0 GB / 20.0 GB");
+    expect(rendered.container.textContent).not.toContain("GPU not detected / not supported");
+  });
+
   it("re-requests history with the 5m bucket when the window changes", () => {
     const rendered = renderSection();
     root = rendered.root;

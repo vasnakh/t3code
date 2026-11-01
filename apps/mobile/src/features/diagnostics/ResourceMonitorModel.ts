@@ -1,4 +1,5 @@
 import type {
+  HostGpuSnapshot,
   HostResourcesSnapshot,
   ServerProcessDiagnosticsEntry,
   ServerProcessResourceHistoryBucket,
@@ -98,6 +99,55 @@ export function hostMemoryUsedPercent(snapshot: HostResourcesSnapshot | null): n
   const used = hostMemoryUsedBytes(snapshot);
   if (used === null || snapshot === null) return null;
   return (used / snapshot.totalMemoryBytes) * 100;
+}
+
+export function hostGpus(snapshot: HostResourcesSnapshot | null): readonly HostGpuSnapshot[] {
+  return snapshot?.gpus ?? [];
+}
+
+export function formatGpuName(name: string): string {
+  const shortened = name
+    .replace(/^(?:NVIDIA\s+(?:GeForce\s+)?)|(?:AMD\s+)|(?:Apple\s+)/i, "")
+    .trim();
+  return shortened.length > 0 ? shortened : name;
+}
+
+export function gpuUtilizationPercent(gpu: HostGpuSnapshot): number | null {
+  if (gpu.utilization == null) return null;
+  return gpu.utilization * 100;
+}
+
+export function gpuMemoryUsedPercent(gpu: HostGpuSnapshot): number | null {
+  if (gpu.memoryUsedBytes == null || gpu.memoryTotalBytes == null || gpu.memoryTotalBytes <= 0) {
+    return null;
+  }
+  return (gpu.memoryUsedBytes / gpu.memoryTotalBytes) * 100;
+}
+
+export function gpuMemoryDetail(gpu: HostGpuSnapshot): string {
+  if (gpu.memoryUsedBytes == null || gpu.memoryTotalBytes == null) return "Unavailable";
+  return `${formatBytes(gpu.memoryUsedBytes)} / ${formatBytes(gpu.memoryTotalBytes)}`;
+}
+
+export function gpuGaugeLabels(gpus: readonly HostGpuSnapshot[]): ReadonlyArray<{
+  readonly util: string;
+  readonly memory: string;
+}> {
+  if (gpus.length === 1) return [{ util: "GPU util", memory: "GPU memory" }];
+  const counts = new Map<string, number>();
+  for (const gpu of gpus) {
+    const name = formatGpuName(gpu.name);
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  const seen = new Map<string, number>();
+  return gpus.map((gpu) => {
+    const name = formatGpuName(gpu.name);
+    const total = counts.get(name) ?? 1;
+    const next = (seen.get(name) ?? 0) + 1;
+    seen.set(name, next);
+    const label = total === 1 ? name : `${name} ${next}`;
+    return { util: `${label} util`, memory: `${label} memory` };
+  });
 }
 
 export function t3MemoryPercentOfHost(

@@ -9,6 +9,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import { amdSysfsCardIds, parseAmdSysfsCard, parseNvidiaSmiCsv, withHostGpus } from "./HostGpus.ts";
+
 export class HostResources extends Context.Service<
   HostResources,
   { readonly read: Effect.Effect<HostResourcesSnapshot> }
@@ -70,13 +72,56 @@ const make = Effect.fn("makeHostResources")(function* () {
         );
       availableMemoryBytes = darwinAvailableMemory(output) ?? availableMemoryBytes;
     }
-    return {
-      sampledAt: DateTime.toEpochMillis(yield* DateTime.now),
-      cpuUtilization,
-      cpuCount: cpu.count,
-      availableMemoryBytes: Math.min(totalMemoryBytes, Math.max(0, availableMemoryBytes)),
-      totalMemoryBytes,
-    };
+    const nvidiaOutput = yield* spawner
+      .string(
+        ChildProcess.make(
+          "nvidia-smi",
+          [
+            "--query-gpu=name,utilization.gpu,memory.used,memory.total",
+            "--format=csv,noheader,nounits",
+          ],
+          { stdin: "ignore", stderr: "ignore" },
+        ),
+      )
+      .pipe(
+        Effect.timeout("2 seconds"),
+        Effect.orElseSucceed(() => ""),
+      );
+    const gpus = parseNvidiaSmiCsv(nvidiaOutput);
+    if (platform === "linux") {
+      const cards = yield* fs.readDirectory("/sys/class/drm").pipe(Effect.orElseSucceed(() => []));
+      for (const card of amdSysfsCardIds(cards)) {
+        const device = `/sys/class/drm/${card}/device`;
+        const [vendor, busyPercent, memoryUsed, memoryTotal, productName, gpuName] =
+          yield* Effect.all([
+            fs.readFileString(`${device}/vendor`).pipe(Effect.orElseSucceed(() => "")),
+            fs.readFileString(`${device}/gpu_busy_percent`).pipe(Effect.orElseSucceed(() => "")),
+            fs.readFileString(`${device}/mem_info_vram_used`).pipe(Effect.orElseSucceed(() => "")),
+            fs.readFileString(`${device}/mem_info_vram_total`).pipe(Effect.orElseSucceed(() => "")),
+            fs.readFileString(`${device}/product_name`).pipe(Effect.orElseSucceed(() => "")),
+            fs.readFileString(`${device}/gpu_name`).pipe(Effect.orElseSucceed(() => "")),
+          ]);
+        const name = productName.trim() || gpuName.trim();
+        const gpu = parseAmdSysfsCard({
+          vendor,
+          busyPercent,
+          memoryUsed,
+          memoryTotal,
+          ...(name.length > 0 ? { productName: name } : {}),
+        });
+        if (gpu) gpus.push(gpu);
+      }
+    }
+    return withHostGpus(
+      {
+        sampledAt: DateTime.toEpochMillis(yield* DateTime.now),
+        cpuUtilization,
+        cpuCount: cpu.count,
+        availableMemoryBytes: Math.min(totalMemoryBytes, Math.max(0, availableMemoryBytes)),
+        totalMemoryBytes,
+      },
+      gpus,
+    );
   });
 
   const cache = yield* Cache.make({

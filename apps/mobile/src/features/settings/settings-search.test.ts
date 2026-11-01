@@ -59,6 +59,7 @@ describe("filterSettingsSections", () => {
     },
     { query: "usage", expected: [[null, ["Usage"]]] },
     { query: "resource monitor", expected: [["Interface", ["Diagnostics"]]] },
+    { query: "gpu", expected: [["Interface", ["Diagnostics"]]] },
     { query: "zzzz", expected: [] },
   ])("$query", ({ query, expected }) => {
     expect(visible(query)).toEqual(expected);

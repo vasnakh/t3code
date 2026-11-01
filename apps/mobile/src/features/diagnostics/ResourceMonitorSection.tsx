@@ -58,8 +58,8 @@ export function ResourceMonitorSection(props: {
         title="Workload"
         footer={
           props.environmentLabel
-            ? `Live figures for ${props.environmentLabel}. Host CPU and memory come from the machine running this T3 server. T3 figures are the server process and its descendants.`
-            : "Host CPU and memory come from the machine running this T3 server. T3 figures are the server process and its descendants."
+            ? `Live figures for ${props.environmentLabel}. Host CPU, memory, and GPU come from the machine running this T3 server. T3 figures are the server process and its descendants.`
+            : "Host CPU, memory, and GPU come from the machine running this T3 server. T3 figures are the server process and its descendants."
         }
       >
         <WorkloadGauges
@@ -175,6 +175,7 @@ function WorkloadGauges(props: {
             : "Unavailable"
         }
       />
+      <GpuGauges host={props.host} />
       <ResourceLoadGauge
         label="T3 CPU"
         percent={props.t3CpuPercent}
@@ -193,6 +194,64 @@ function WorkloadGauges(props: {
         detail={t3MemoryPercent === null ? "Resident set" : "of host RAM"}
       />
     </View>
+  );
+}
+
+function GpuGauges(props: { readonly host: HostResourcesSnapshot | null }) {
+  if (props.host === null) {
+    return (
+      <View
+        accessible
+        accessibilityLabel="GPU unavailable"
+        className="w-full items-center px-2 py-1"
+      >
+        <Text className="text-center text-sm text-foreground-muted">GPU unavailable</Text>
+      </View>
+    );
+  }
+
+  const gpus = ResourceMonitorModel.hostGpus(props.host);
+  if (gpus.length === 0) {
+    return (
+      <View
+        accessible
+        accessibilityLabel="GPU not detected / not supported"
+        className="w-full items-center px-2 py-1"
+      >
+        <Text className="text-center text-sm font-t3-medium text-foreground">
+          GPU not detected / not supported
+        </Text>
+        <Text className="text-center text-xs text-foreground-muted">
+          This host did not report a GPU sample.
+        </Text>
+      </View>
+    );
+  }
+
+  const labels = ResourceMonitorModel.gpuGaugeLabels(gpus);
+  return (
+    <>
+      {gpus.map((gpu, gpuIndex) => {
+        const label = labels[gpuIndex]!;
+        return (
+          <View
+            key={`${gpu.name}:${gpu.utilization ?? "na"}:${gpu.memoryUsedBytes ?? "na"}:${gpu.memoryTotalBytes ?? "na"}`}
+            className="w-full flex-row flex-wrap"
+          >
+            <ResourceLoadGauge
+              label={label.util}
+              percent={ResourceMonitorModel.gpuUtilizationPercent(gpu)}
+              detail={gpu.name}
+            />
+            <ResourceLoadGauge
+              label={label.memory}
+              percent={ResourceMonitorModel.gpuMemoryUsedPercent(gpu)}
+              detail={ResourceMonitorModel.gpuMemoryDetail(gpu)}
+            />
+          </View>
+        );
+      })}
+    </>
   );
 }
 
