@@ -95,6 +95,15 @@ const SETTINGS_SEARCH_TERMS = {
     "terms",
     "open source licenses",
   ],
+  SettingsDiagnostics: [
+    "diagnostics",
+    "resource monitor",
+    "cpu",
+    "memory",
+    "process tree",
+    "workload",
+    "crash log",
+  ],
 } satisfies Partial<Record<SettingsPageTarget | "account", readonly string[]>>;
 const termsById: ReadonlyMap<string, readonly string[]> = new Map(
   Object.entries(SETTINGS_SEARCH_TERMS),

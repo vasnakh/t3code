@@ -16,6 +16,7 @@ const SECTIONS = [
     rows: [
       { id: "SettingsAppearance", label: "Appearance" },
       { id: "SettingsKeyboard", label: "Keyboard" },
+      { id: "SettingsDiagnostics", label: "Diagnostics" },
     ],
   },
   {
@@ -57,6 +58,7 @@ describe("filterSettingsSections", () => {
       expected: [["Server settings", ["Provider accounts"]]],
     },
     { query: "usage", expected: [[null, ["Usage"]]] },
+    { query: "resource monitor", expected: [["Interface", ["Diagnostics"]]] },
     { query: "zzzz", expected: [] },
   ])("$query", ({ query, expected }) => {
     expect(visible(query)).toEqual(expected);
