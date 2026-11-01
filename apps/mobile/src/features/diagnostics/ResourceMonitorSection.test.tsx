@@ -36,12 +36,14 @@ vi.mock("react-native", () => ({
     children,
     accessibilityLabel,
     accessibilityRole,
+    style,
   }: {
     children?: ReactNode;
     accessibilityLabel?: string;
     accessibilityRole?: string;
+    style?: { height?: number | string };
   }) => (
-    <div aria-label={accessibilityLabel} role={accessibilityRole}>
+    <div aria-label={accessibilityLabel} role={accessibilityRole} style={style}>
       {children}
     </div>
   ),
@@ -141,6 +143,7 @@ vi.mock("../settings/components/SettingsSection", () => ({
   ),
 }));
 
+import * as ResourceMonitorModel from "./ResourceMonitorModel";
 import { ResourceMonitorSection } from "./ResourceMonitorSection";
 
 const ENVIRONMENT_ID = EnvironmentId.make("env-1");
@@ -304,12 +307,42 @@ describe("ResourceMonitorSection", () => {
     expect(rendered.container.textContent).toContain("Host CPU");
     expect(rendered.container.textContent).toContain("42.0%");
     expect(rendered.container.textContent).toContain("T3 CPU");
-    expect(rendered.container.textContent).toContain("18.5%");
+    expect(rendered.container.textContent).toContain("22.5%");
+    expect(rendered.container.textContent).toContain("3 processes");
     expect(rendered.container.textContent).toContain("codex");
     expect(rendered.container.textContent).toContain("worker-child");
+    const cpuBar = rendered.container.querySelector(
+      `[aria-label="Average CPU 10.0%, peak 20.0%"]`,
+    );
+    expect(cpuBar).not.toBeNull();
+    const expectedPeakHeight = ResourceMonitorModel.historyChartBars(historySnapshot().buckets)[0]!
+      .peakCpuHeight;
+    expect(expectedPeakHeight).toBeGreaterThan(0);
     expect(
-      rendered.container.querySelector(`[aria-label="Average CPU 10.0%, peak 20.0%"]`),
-    ).not.toBeNull();
+      [...(cpuBar?.querySelectorAll("div") ?? [])].some(
+        (node) => node.style.height === `${expectedPeakHeight}px`,
+      ),
+    ).toBe(true);
+  });
+
+  it("shows T3 totals from the history root when diagnostics has no children", () => {
+    mocks.queries.set(
+      "process",
+      query({
+        ...processSnapshot(),
+        processCount: 0,
+        totalRssBytes: 0,
+        totalCpuPercent: 0,
+        processes: [],
+      }),
+    );
+    const rendered = renderSection();
+    root = rendered.root;
+
+    expect(rendered.container.textContent).toContain("4.0%");
+    expect(rendered.container.textContent).toContain("64.0 MB");
+    expect(rendered.container.textContent).toContain("1 process");
+    expect(rendered.container.textContent).toContain("No live descendant processes found.");
   });
 
   it.each([

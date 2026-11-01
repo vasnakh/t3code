@@ -1,3 +1,4 @@
+import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -73,6 +74,82 @@ describe("ResourceMonitorModel", () => {
     expect(ResourceMonitorModel.barHeight(0.1, 100)).toBe(2);
   });
 
+  it("draws non-empty chart bars from a real-shaped history payload", () => {
+    const started = DateTime.makeUnsafe("2026-11-01T18:54:00.000Z");
+    const buckets = [
+      bucket(started, { avgCpuPercent: 0, maxCpuPercent: 0, maxRssBytes: 0 }),
+      bucket(DateTime.add(started, { minutes: 1 }), {
+        avgCpuPercent: 0,
+        maxCpuPercent: 0,
+        maxRssBytes: 0,
+      }),
+      bucket(DateTime.add(started, { minutes: 14 }), {
+        avgCpuPercent: 1.2,
+        maxCpuPercent: 12,
+        maxRssBytes: Math.round(452.1 * 1024 * 1024),
+      }),
+    ];
+    const bars = ResourceMonitorModel.historyChartBars(buckets);
+    expect(bars).toHaveLength(3);
+    expect(bars[0]).toMatchObject({ peakCpuHeight: 0, averageCpuHeight: 0, peakMemoryHeight: 0 });
+    expect(bars[2]!.peakCpuHeight).toBe(ResourceMonitorModel.HISTORY_CHART_BAR_MAX_HEIGHT);
+    expect(bars[2]!.averageCpuHeight).toBeGreaterThan(0);
+    expect(bars[2]!.peakMemoryHeight).toBe(ResourceMonitorModel.HISTORY_CHART_BAR_MAX_HEIGHT);
+    expect(bars.some((bar) => bar.peakCpuHeight > 0 && bar.peakMemoryHeight > 0)).toBe(true);
+  });
+
+  it("includes the root server process in T3 totals when diagnostics omits it", () => {
+    expect(
+      ResourceMonitorModel.t3Workload({
+        diagnostics: {
+          processes: [],
+          processCount: 0,
+          totalCpuPercent: 0,
+          totalRssBytes: 0,
+        },
+        history: {
+          topProcesses: [
+            {
+              pid: 17318,
+              currentCpuPercent: 1.4,
+              currentRssBytes: Math.round(452.1 * 1024 * 1024),
+            },
+          ],
+        },
+      }),
+    ).toEqual({
+      cpuPercent: 1.4,
+      rssBytes: Math.round(452.1 * 1024 * 1024),
+      processCount: 1,
+    });
+  });
+
+  it("unions diagnostics children with the history root and does not double-count", () => {
+    expect(
+      ResourceMonitorModel.t3Workload({
+        diagnostics: {
+          processes: [
+            { pid: 200, cpuPercent: 6, rssBytes: 20_000_000 },
+            { pid: 17318, cpuPercent: 99, rssBytes: 1 },
+          ],
+          processCount: 2,
+          totalCpuPercent: 6,
+          totalRssBytes: 20_000_000,
+        },
+        history: {
+          topProcesses: [
+            { pid: 17318, currentCpuPercent: 1.4, currentRssBytes: 452_000_000 },
+            { pid: 200, currentCpuPercent: 5, currentRssBytes: 21_000_000 },
+          ],
+        },
+      }),
+    ).toEqual({
+      cpuPercent: 6.4,
+      rssBytes: 473_000_000,
+      processCount: 2,
+    });
+  });
+
   it("hides collapsed descendant rows in depth order", () => {
     const processes = [
       process(10, 0, [11, 12]),
@@ -102,6 +179,22 @@ describe("ResourceMonitorModel", () => {
     expect(ResourceMonitorModel.historyVisualDepth(processes[2]!, shallowest)).toBe(2);
   });
 });
+
+function bucket(
+  startedAt: DateTime.Utc,
+  values: {
+    readonly avgCpuPercent: number;
+    readonly maxCpuPercent: number;
+    readonly maxRssBytes: number;
+  },
+) {
+  return {
+    startedAt,
+    endedAt: DateTime.add(startedAt, { seconds: 60 }),
+    maxProcessCount: values.maxRssBytes > 0 ? 1 : 0,
+    ...values,
+  };
+}
 
 function process(pid: number, depth: number, childPids: readonly number[]) {
   return {

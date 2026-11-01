@@ -4,6 +4,7 @@ import type {
   ServerProcessResourceHistoryBucket,
   ServerProcessResourceHistorySummary,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 
 export type ResourceLoadTone = "ok" | "warn" | "crit";
 
@@ -128,6 +129,91 @@ export function memoryPeakBytes(
 export function barHeight(value: number, max: number, minimumVisiblePercent = 2): number {
   if (value <= 0) return 0;
   return Math.max(minimumVisiblePercent, (value / Math.max(1, max)) * 100);
+}
+
+/** RN percentage heights collapse when the column's height is content-sized. */
+export const HISTORY_CHART_TRACK_HEIGHT = 80;
+export const HISTORY_CHART_TRACK_PADDING = 8;
+export const HISTORY_CHART_BAR_MAX_HEIGHT =
+  HISTORY_CHART_TRACK_HEIGHT - HISTORY_CHART_TRACK_PADDING * 2;
+
+export function historyChartBars(
+  buckets: ReadonlyArray<ServerProcessResourceHistoryBucket>,
+): ReadonlyArray<{
+  readonly startedAtMs: number;
+  readonly peakCpuHeight: number;
+  readonly averageCpuHeight: number;
+  readonly peakMemoryHeight: number;
+}> {
+  const cpuMax = historyCpuScaleMax(buckets);
+  const memoryMax = historyMemoryScaleMax(buckets);
+  return buckets.map((bucket) => ({
+    startedAtMs: DateTime.toEpochMillis(bucket.startedAt),
+    peakCpuHeight: (barHeight(bucket.maxCpuPercent, cpuMax) / 100) * HISTORY_CHART_BAR_MAX_HEIGHT,
+    averageCpuHeight:
+      (barHeight(bucket.avgCpuPercent, cpuMax) / 100) * HISTORY_CHART_BAR_MAX_HEIGHT,
+    peakMemoryHeight:
+      (barHeight(bucket.maxRssBytes, memoryMax) / 100) * HISTORY_CHART_BAR_MAX_HEIGHT,
+  }));
+}
+
+/**
+ * T3 gauges are the server process plus descendants. `getProcessDiagnostics`
+ * totals omit the root (signalable children only); history `topProcesses`
+ * includes `isServerRoot`.
+ */
+export function t3Workload(input: {
+  readonly diagnostics: {
+    readonly processes: ReadonlyArray<{
+      readonly pid: number;
+      readonly cpuPercent: number;
+      readonly rssBytes: number;
+    }>;
+    readonly processCount: number;
+    readonly totalCpuPercent: number;
+    readonly totalRssBytes: number;
+  } | null;
+  readonly history: {
+    readonly topProcesses: ReadonlyArray<{
+      readonly pid: number;
+      readonly currentCpuPercent: number;
+      readonly currentRssBytes: number;
+    }>;
+  } | null;
+}): { cpuPercent: number; rssBytes: number; processCount: number } | null {
+  if (input.diagnostics === null && input.history === null) return null;
+
+  const byPid = new Map<number, { cpuPercent: number; rssBytes: number }>();
+  for (const process of input.history?.topProcesses ?? []) {
+    byPid.set(process.pid, {
+      cpuPercent: process.currentCpuPercent,
+      rssBytes: process.currentRssBytes,
+    });
+  }
+  for (const process of input.diagnostics?.processes ?? []) {
+    if (byPid.has(process.pid)) continue;
+    byPid.set(process.pid, {
+      cpuPercent: process.cpuPercent,
+      rssBytes: process.rssBytes,
+    });
+  }
+  if (byPid.size === 0) {
+    return input.diagnostics === null
+      ? { cpuPercent: 0, rssBytes: 0, processCount: 0 }
+      : {
+          cpuPercent: input.diagnostics.totalCpuPercent,
+          rssBytes: input.diagnostics.totalRssBytes,
+          processCount: input.diagnostics.processCount,
+        };
+  }
+
+  let cpuPercent = 0;
+  let rssBytes = 0;
+  for (const process of byPid.values()) {
+    cpuPercent += process.cpuPercent;
+    rssBytes += process.rssBytes;
+  }
+  return { cpuPercent, rssBytes, processCount: byPid.size };
 }
 
 export function visibleProcessTree(

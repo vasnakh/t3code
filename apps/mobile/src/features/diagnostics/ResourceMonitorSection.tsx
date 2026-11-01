@@ -5,7 +5,6 @@ import type {
   ServerProcessResourceHistoryBucket,
   ServerProcessResourceHistorySummary,
 } from "@t3tools/contracts";
-import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { useState } from "react";
 import { Pressable, View } from "react-native";
@@ -48,6 +47,10 @@ export function ResourceMonitorSection(props: {
   const host = monitor.canReadHost ? monitor.host.data : null;
   const processes = monitor.processes.data;
   const history = monitor.history.data;
+  const t3 = ResourceMonitorModel.t3Workload({
+    diagnostics: processes,
+    history,
+  });
 
   return (
     <View className="gap-6">
@@ -61,10 +64,13 @@ export function ResourceMonitorSection(props: {
       >
         <WorkloadGauges
           host={host}
-          t3CpuPercent={processes?.totalCpuPercent ?? null}
-          t3RssBytes={processes?.totalRssBytes ?? null}
-          processCount={processes?.processCount ?? null}
-          loading={monitor.processes.isPending && processes === null}
+          t3CpuPercent={t3?.cpuPercent ?? null}
+          t3RssBytes={t3?.rssBytes ?? null}
+          processCount={t3?.processCount ?? null}
+          loading={
+            (monitor.processes.isPending && processes === null) &&
+            (monitor.history.isPending && history === null)
+          }
         />
         {monitor.host.error ? <ErrorCopy detail={monitor.host.error} /> : null}
         {processError ? <ErrorCopy detail={processError.message} /> : null}
@@ -86,7 +92,7 @@ export function ResourceMonitorSection(props: {
         }
         footer={
           history
-            ? `Peak descendant memory ${ResourceMonitorModel.formatBytes(
+            ? `Peak T3 memory ${ResourceMonitorModel.formatBytes(
                 ResourceMonitorModel.memoryPeakBytes(history.buckets),
               )} · ${history.retainedSampleCount} samples`
             : undefined
@@ -272,29 +278,34 @@ function HistoryCharts(props: {
     return <EmptyCopy detail="No resource samples in this window yet. Keep this screen open." />;
   }
 
-  const cpuMax = ResourceMonitorModel.historyCpuScaleMax(props.buckets);
-  const memoryMax = ResourceMonitorModel.historyMemoryScaleMax(props.buckets);
+  const bars = ResourceMonitorModel.historyChartBars(props.buckets);
 
   return (
     <View className="gap-4 border-b border-border-subtle px-4 py-4">
       <HistoryChart
         title="CPU"
-        buckets={props.buckets}
-        scaleMax={cpuMax}
-        peak={(bucket) => bucket.maxCpuPercent}
-        average={(bucket) => bucket.avgCpuPercent}
-        label={(bucket) =>
-          `Average CPU ${ResourceMonitorModel.formatPercent(
-            bucket.avgCpuPercent,
-          )}, peak ${ResourceMonitorModel.formatPercent(bucket.maxCpuPercent)}`
-        }
+        bars={bars.map((bar, index) => {
+          const bucket = props.buckets[index]!;
+          return {
+            key: bar.startedAtMs,
+            peakHeight: bar.peakCpuHeight,
+            averageHeight: bar.averageCpuHeight,
+            label: `Average CPU ${ResourceMonitorModel.formatPercent(
+              bucket.avgCpuPercent,
+            )}, peak ${ResourceMonitorModel.formatPercent(bucket.maxCpuPercent)}`,
+          };
+        })}
       />
       <HistoryChart
         title="Memory"
-        buckets={props.buckets}
-        scaleMax={memoryMax}
-        peak={(bucket) => bucket.maxRssBytes}
-        label={(bucket) => `Peak memory ${ResourceMonitorModel.formatBytes(bucket.maxRssBytes)}`}
+        bars={bars.map((bar, index) => {
+          const bucket = props.buckets[index]!;
+          return {
+            key: bar.startedAtMs,
+            peakHeight: bar.peakMemoryHeight,
+            label: `Peak memory ${ResourceMonitorModel.formatBytes(bucket.maxRssBytes)}`,
+          };
+        })}
       />
     </View>
   );
@@ -302,40 +313,41 @@ function HistoryCharts(props: {
 
 function HistoryChart(props: {
   readonly title: string;
-  readonly buckets: ReadonlyArray<ServerProcessResourceHistoryBucket>;
-  readonly scaleMax: number;
-  readonly peak: (bucket: ServerProcessResourceHistoryBucket) => number;
-  readonly average?: (bucket: ServerProcessResourceHistoryBucket) => number;
-  readonly label: (bucket: ServerProcessResourceHistoryBucket) => string;
+  readonly bars: ReadonlyArray<{
+    readonly key: number;
+    readonly peakHeight: number;
+    readonly averageHeight?: number;
+    readonly label: string;
+  }>;
 }) {
+  const trackHeight = ResourceMonitorModel.HISTORY_CHART_TRACK_HEIGHT;
+  const barMaxHeight = ResourceMonitorModel.HISTORY_CHART_BAR_MAX_HEIGHT;
   return (
     <View className="gap-2">
       <Text className="text-xs font-t3-medium uppercase tracking-widest text-foreground-muted">
         {props.title}
       </Text>
-      <View className="h-24 flex-row items-end gap-0.5 overflow-hidden rounded-lg bg-subtle p-2">
-        {props.buckets.map((bucket) => (
+      <View
+        className="flex-row items-end gap-0.5 overflow-hidden rounded-lg bg-subtle p-2"
+        style={{ height: trackHeight }}
+      >
+        {props.bars.map((bar) => (
           <View
-            key={DateTime.toEpochMillis(bucket.startedAt)}
-            accessibilityLabel={props.label(bucket)}
-            className="min-w-1 flex-1 justify-end"
+            key={bar.key}
+            accessibilityLabel={bar.label}
+            className="relative min-w-1 flex-1"
+            style={{ height: barMaxHeight }}
           >
-            <View className="relative h-full justify-end">
+            <View
+              className="absolute inset-x-0 bottom-0 rounded-t-sm bg-foreground/20"
+              style={{ height: bar.peakHeight }}
+            />
+            {bar.averageHeight !== undefined ? (
               <View
-                className="absolute inset-x-0 bottom-0 rounded-t-sm bg-foreground/20"
-                style={{
-                  height: `${ResourceMonitorModel.barHeight(props.peak(bucket), props.scaleMax)}%`,
-                }}
+                className="absolute inset-x-0 bottom-0 rounded-t-sm bg-foreground/70"
+                style={{ height: bar.averageHeight }}
               />
-              {props.average ? (
-                <View
-                  className="absolute inset-x-0 bottom-0 rounded-t-sm bg-foreground/70"
-                  style={{
-                    height: `${ResourceMonitorModel.barHeight(props.average(bucket), props.scaleMax)}%`,
-                  }}
-                />
-              ) : null}
-            </View>
+            ) : null}
           </View>
         ))}
       </View>
