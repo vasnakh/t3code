@@ -68,8 +68,10 @@ export function ResourceMonitorSection(props: {
           t3RssBytes={t3?.rssBytes ?? null}
           processCount={t3?.processCount ?? null}
           loading={
-            (monitor.processes.isPending && processes === null) &&
-            (monitor.history.isPending && history === null)
+            monitor.processes.isPending &&
+            processes === null &&
+            monitor.history.isPending &&
+            history === null
           }
         />
         {monitor.host.error ? <ErrorCopy detail={monitor.host.error} /> : null}

@@ -311,9 +311,7 @@ describe("ResourceMonitorSection", () => {
     expect(rendered.container.textContent).toContain("3 processes");
     expect(rendered.container.textContent).toContain("codex");
     expect(rendered.container.textContent).toContain("worker-child");
-    const cpuBar = rendered.container.querySelector(
-      `[aria-label="Average CPU 10.0%, peak 20.0%"]`,
-    );
+    const cpuBar = rendered.container.querySelector(`[aria-label="Average CPU 10.0%, peak 20.0%"]`);
     expect(cpuBar).not.toBeNull();
     const expectedPeakHeight = ResourceMonitorModel.historyChartBars(historySnapshot().buckets)[0]!
       .peakCpuHeight;
