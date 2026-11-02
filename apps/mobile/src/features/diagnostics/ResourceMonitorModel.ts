@@ -414,6 +414,30 @@ function forestFromDepth<T>(
   return roots;
 }
 
+function forestFromParent<T>(
+  processes: ReadonlyArray<T>,
+  input: {
+    readonly id: (process: T) => number;
+    readonly parentId: (process: T) => number;
+  },
+): ProcessTreeNode<T>[] | null {
+  const nodes = processes.map((process) => ({ process, children: [] as ProcessTreeNode<T>[] }));
+  const byId = new Map(nodes.map((node) => [input.id(node.process), node]));
+  let linked = 0;
+  for (const node of nodes) {
+    const parent = byId.get(input.parentId(node.process));
+    if (parent && parent !== node) {
+      parent.children.push(node);
+      linked += 1;
+    }
+  }
+  if (linked === 0) return null;
+  return nodes.filter((node) => {
+    const parent = byId.get(input.parentId(node.process));
+    return parent == null || parent === node;
+  });
+}
+
 function subtreeIntensity<T>(
   node: ProcessTreeNode<T>,
   intensity: (process: T) => ProcessIntensityKey,
@@ -450,10 +474,17 @@ export function sortProcessTree<T>(
   processes: ReadonlyArray<T>,
   input: {
     readonly depth: (process: T) => number;
+    readonly id?: (process: T) => number;
+    readonly parentId?: (process: T) => number;
     readonly intensity: (process: T) => ProcessIntensityKey;
   },
 ): T[] {
-  return flattenSortedTree(forestFromDepth(processes, input.depth), input.intensity);
+  const forest =
+    input.id && input.parentId
+      ? (forestFromParent(processes, { id: input.id, parentId: input.parentId }) ??
+        forestFromDepth(processes, input.depth))
+      : forestFromDepth(processes, input.depth);
+  return flattenSortedTree(forest, input.intensity);
 }
 
 export function displayedLiveProcesses(
@@ -465,6 +496,8 @@ export function displayedLiveProcesses(
   return visibleProcessTree(
     sortProcessTree(processes, {
       depth: (process) => process.depth,
+      id: (process) => process.pid,
+      parentId: (process) => process.ppid,
       intensity: liveProcessIntensity,
     }),
     collapsedPids,
@@ -478,6 +511,8 @@ export function displayedHistoryProcesses(
   if (layout === "usage") return sortProcessesByUsage(processes, historyProcessIntensity);
   return sortProcessTree(processes, {
     depth: (process) => process.depth,
+    id: (process) => process.pid,
+    parentId: (process) => process.ppid,
     intensity: historyProcessIntensity,
   });
 }

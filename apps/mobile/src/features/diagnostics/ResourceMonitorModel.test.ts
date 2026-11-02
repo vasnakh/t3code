@@ -303,21 +303,49 @@ describe("ResourceMonitorModel", () => {
         (entry) => entry.pid,
       ),
     ).toEqual([12, 10, 20, 11, 13]);
+    const historyTree = [
+      historyProcess(1, 0, true, { currentCpuPercent: 2, currentRssBytes: 8, ppid: 0 }),
+      historyProcess(2, 3, false, { currentCpuPercent: 0.2, currentRssBytes: 4, ppid: 1 }),
+      historyProcess(3, 4, false, {
+        currentCpuPercent: 9,
+        currentRssBytes: 2,
+        gpuMemoryBytes: 32,
+        ppid: 2,
+      }),
+      historyProcess(4, 3, false, { currentCpuPercent: 1, currentRssBytes: 3, ppid: 1 }),
+    ];
+    expect(
+      ResourceMonitorModel.displayedHistoryProcesses(historyTree, "tree").map((entry) => entry.pid),
+    ).toEqual([1, 2, 3, 4]);
     expect(
       ResourceMonitorModel.displayedHistoryProcesses(
-        [
-          historyProcess(1, 0, true, { currentCpuPercent: 2, currentRssBytes: 8 }),
-          historyProcess(2, 3, false, { currentCpuPercent: 0.2, currentRssBytes: 4 }),
-          historyProcess(3, 4, false, {
-            currentCpuPercent: 9,
-            currentRssBytes: 2,
-            gpuMemoryBytes: 32,
-          }),
-          historyProcess(4, 3, false, { currentCpuPercent: 1, currentRssBytes: 3 }),
-        ],
+        [historyTree[2]!, historyTree[3]!, historyTree[1]!, historyTree[0]!],
         "tree",
       ).map((entry) => entry.pid),
     ).toEqual([1, 2, 3, 4]);
+  });
+
+  it("keeps history tree parent/child rows together when the sidecar ranks by usage", () => {
+    const usageRanked = [
+      historyProcess(493, 7, false, { currentCpuPercent: 100.2, currentRssBytes: 2, ppid: 492 }),
+      historyProcess(486, 1, false, { currentCpuPercent: 99.9, currentRssBytes: 4, ppid: 478 }),
+      historyProcess(485, 1, false, { currentCpuPercent: 99.4, currentRssBytes: 4, ppid: 478 }),
+      historyProcess(478, 0, true, { currentCpuPercent: 1.7, currentRssBytes: 441, ppid: 1 }),
+      historyProcess(490, 4, false, { currentCpuPercent: 0, currentRssBytes: 4, ppid: 489 }),
+      historyProcess(491, 5, false, {
+        currentCpuPercent: 0,
+        currentRssBytes: 4,
+        gpuMemoryBytes: 1.2 * 1024 * 1024 * 1024,
+        ppid: 490,
+      }),
+      historyProcess(488, 2, false, { currentCpuPercent: 0, currentRssBytes: 4, ppid: 487 }),
+      historyProcess(489, 3, false, { currentCpuPercent: 0, currentRssBytes: 4, ppid: 488 }),
+      historyProcess(487, 1, false, { currentCpuPercent: 0, currentRssBytes: 4, ppid: 478 }),
+      historyProcess(492, 6, false, { currentCpuPercent: 0, currentRssBytes: 4, ppid: 491 }),
+    ];
+    expect(
+      ResourceMonitorModel.displayedHistoryProcesses(usageRanked, "tree").map((entry) => entry.pid),
+    ).toEqual([478, 487, 488, 489, 490, 491, 492, 493, 486, 485]);
   });
 
   it("omits GPU from process stats when the server did not report it", () => {
@@ -391,13 +419,14 @@ function historyProcess(
     readonly currentCpuPercent: number;
     readonly currentRssBytes: number;
     readonly gpuMemoryBytes?: number;
+    readonly ppid?: number;
   },
 ) {
   const now = DateTime.makeUnsafe("2026-11-01T00:00:00.000Z");
   return {
     processKey: `${pid}:1`,
     pid,
-    ppid: 1,
+    ppid: extras.ppid ?? 1,
     command: `proc-${pid}`,
     depth,
     isServerRoot,
