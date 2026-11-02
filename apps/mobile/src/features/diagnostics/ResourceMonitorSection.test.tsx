@@ -117,9 +117,9 @@ vi.mock("../../components/ui/SegmentedControl", () => ({
     selected,
     onSelect,
   }: {
-    options: ReadonlyArray<{ value: number; label: string }>;
-    selected: number;
-    onSelect: (value: number) => void;
+    options: ReadonlyArray<{ value: number | string; label: string }>;
+    selected: number | string;
+    onSelect: (value: number | string) => void;
   }) => (
     <div>
       {options.map((option) => (
@@ -211,6 +211,58 @@ function processSnapshot() {
         childPids: [],
       },
     ],
+  };
+}
+
+function rowPids(container: HTMLElement, prefix: "history-process " | "live-process "): number[] {
+  return [...container.querySelectorAll(`[aria-label^="${prefix}"]`)].map((row) =>
+    Number(row.getAttribute("aria-label")?.replace(prefix, "")),
+  );
+}
+
+function historyProcessRowPids(container: HTMLElement): number[] {
+  return rowPids(container, "history-process ");
+}
+
+function liveProcessRowPids(container: HTMLElement): number[] {
+  return rowPids(container, "live-process ");
+}
+
+function maxProcessRowPadding(container: HTMLElement): number {
+  return Math.max(
+    0,
+    ...[...container.querySelectorAll(`[aria-label^="live-process "]`)].map((row) => {
+      const padding = Number.parseFloat((row as HTMLElement).style.paddingLeft || "0");
+      return Number.isFinite(padding) ? padding : 0;
+    }),
+  );
+}
+
+function historyRow(
+  processKey: string,
+  pid: number,
+  command: string,
+  currentCpuPercent: number,
+  currentRssBytes: number,
+  gpuMemoryBytes?: number,
+) {
+  return {
+    processKey,
+    pid,
+    ppid: 1,
+    command,
+    depth: pid === 100 ? 0 : 1,
+    isServerRoot: pid === 100,
+    firstSeenAt: NOW,
+    lastSeenAt: NOW,
+    currentCpuPercent,
+    avgCpuPercent: currentCpuPercent,
+    maxCpuPercent: currentCpuPercent,
+    cpuSecondsApprox: 5,
+    currentRssBytes,
+    maxRssBytes: currentRssBytes,
+    ...(gpuMemoryBytes === undefined ? {} : { gpuMemoryBytes }),
+    sampleCount: 12,
   };
 }
 
@@ -371,12 +423,110 @@ describe("ResourceMonitorSection", () => {
     const rendered = renderSection();
     root = rendered.root;
     expect(rendered.container.textContent).toContain("worker-child");
+    expect(rendered.container.querySelector(`[aria-label="Collapse codex"]`)).toBeNull();
+
+    act(() => {
+      [...rendered.container.querySelectorAll("button")]
+        .find((button) => button.textContent === "Tree")
+        ?.click();
+    });
+    expect(rendered.container.textContent).toContain("worker-child");
 
     act(() => {
       rendered.container.querySelector<HTMLButtonElement>(`[aria-label="Collapse codex"]`)?.click();
     });
     expect(rendered.container.textContent).not.toContain("worker-child");
     expect(rendered.container.querySelector(`[aria-label="Expand codex"]`)).not.toBeNull();
+  });
+
+  it("defaults to usage order and caps tree indent on a phone-width row", () => {
+    mocks.queries.set(
+      "process",
+      query({
+        ...processSnapshot(),
+        processes: [
+          {
+            ...processSnapshot().processes[0]!,
+            pid: 200,
+            cpuPercent: 1.2,
+            rssBytes: 20 * 1024 * 1024,
+            command: "parent",
+            depth: 0,
+            childPids: [201, 202],
+          },
+          {
+            ...processSnapshot().processes[1]!,
+            pid: 201,
+            cpuPercent: 0.4,
+            rssBytes: 10 * 1024 * 1024,
+            command: "quiet-child",
+            depth: 1,
+            childPids: [203],
+          },
+          {
+            ...processSnapshot().processes[1]!,
+            pid: 203,
+            cpuPercent: 0.1,
+            rssBytes: 4 * 1024 * 1024,
+            command: "okvis2x_app_synchronizer",
+            depth: 6,
+            childPids: [],
+          },
+          {
+            ...processSnapshot().processes[1]!,
+            pid: 202,
+            cpuPercent: 18.5,
+            rssBytes: 80 * 1024 * 1024,
+            gpuMemoryBytes: 512 * 1024 * 1024,
+            command: "python3",
+            depth: 1,
+            childPids: [],
+          },
+        ],
+      }),
+    );
+    const rendered = renderSection();
+    root = rendered.root;
+
+    expect(liveProcessRowPids(rendered.container)).toEqual([202, 200, 201, 203]);
+    expect(rendered.container.textContent).toContain("python3");
+    expect(rendered.container.textContent).toContain("GPU 512.0 MB");
+    expect(maxProcessRowPadding(rendered.container)).toBe(12);
+
+    act(() => {
+      [...rendered.container.querySelectorAll("button")]
+        .find((button) => button.textContent === "Tree")
+        ?.click();
+    });
+
+    expect(liveProcessRowPids(rendered.container)).toEqual([200, 202, 201, 203]);
+    expect(rendered.container.textContent).toContain("d6");
+    expect(rendered.container.textContent).toContain("18.5%");
+    expect(rendered.container.textContent).toContain("80.0 MB");
+    expect(maxProcessRowPadding(rendered.container)).toBe(
+      12 +
+        ResourceMonitorModel.PROCESS_ROW_INDENT_STEP *
+          ResourceMonitorModel.PROCESS_ROW_INDENT_MAX_DEPTH,
+    );
+  });
+
+  it("sorts equal CPU rows by GPU memory when present", () => {
+    mocks.queries.set(
+      "history",
+      query({
+        ...historySnapshot(),
+        topProcesses: [
+          historyRow("100:1", 100, "t3", 4, 64 * 1024 * 1024),
+          historyRow("200:1", 200, "claude", 4, 64 * 1024 * 1024, 64 * 1024 * 1024),
+          historyRow("201:1", 201, "codex", 4, 64 * 1024 * 1024, 512 * 1024 * 1024),
+        ],
+      }),
+    );
+    const rendered = renderSection();
+    root = rendered.root;
+    expect(historyProcessRowPids(rendered.container)).toEqual([201, 200, 100]);
+    expect(rendered.container.textContent).toContain("GPU 512.0 MB");
+    expect(rendered.container.textContent).toContain("GPU 64.0 MB");
   });
 
   it("shows a no-GPU state instead of 0% gauges when the host omits gpus", () => {

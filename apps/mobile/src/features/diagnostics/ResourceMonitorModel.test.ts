@@ -232,6 +232,113 @@ describe("ResourceMonitorModel", () => {
     expect(ResourceMonitorModel.historyVisualDepth(processes[1]!, shallowest)).toBe(1);
     expect(ResourceMonitorModel.historyVisualDepth(processes[2]!, shallowest)).toBe(2);
   });
+
+  it("caps process-row indent and badges depths past the visual max", () => {
+    expect(ResourceMonitorModel.processRowIndent(0)).toBe(0);
+    expect(ResourceMonitorModel.processRowIndent(1)).toBe(
+      ResourceMonitorModel.PROCESS_ROW_INDENT_STEP,
+    );
+    expect(ResourceMonitorModel.processRowIndent(2)).toBe(
+      ResourceMonitorModel.PROCESS_ROW_INDENT_STEP * 2,
+    );
+    expect(ResourceMonitorModel.processRowIndent(8)).toBe(
+      ResourceMonitorModel.PROCESS_ROW_INDENT_STEP *
+        ResourceMonitorModel.PROCESS_ROW_INDENT_MAX_DEPTH,
+    );
+    expect(ResourceMonitorModel.processRowIndent(8)).toBeLessThan(24);
+    expect(ResourceMonitorModel.processDepthLabel(2)).toBeNull();
+    expect(ResourceMonitorModel.processDepthLabel(5)).toBe("d5");
+  });
+
+  it("sorts usage by current CPU, then memory, then GPU, then pid", () => {
+    const processes = [
+      { pid: 3, cpuPercent: 10, rssBytes: 10, gpuMemoryBytes: 1 },
+      { pid: 1, cpuPercent: 10, rssBytes: 20 },
+      { pid: 4, cpuPercent: 4, rssBytes: 1, gpuMemoryBytes: 9 },
+      { pid: 2, cpuPercent: 10, rssBytes: 20, gpuMemoryBytes: 8 },
+      { pid: 5, cpuPercent: 10, rssBytes: 20, gpuMemoryBytes: 8 },
+    ];
+    expect(
+      ResourceMonitorModel.sortProcessesByUsage(
+        processes,
+        ResourceMonitorModel.liveProcessIntensity,
+      ).map((entry) => entry.pid),
+    ).toEqual([2, 5, 1, 3, 4]);
+  });
+
+  it("breaks equal CPU and memory ties with per-process GPU memory", () => {
+    expect(
+      ResourceMonitorModel.compareProcessIntensity(
+        { pid: 1, cpuPercent: 4, rssBytes: 100, gpuMemoryBytes: 10 },
+        { pid: 2, cpuPercent: 4, rssBytes: 100, gpuMemoryBytes: 50 },
+      ),
+    ).toBeGreaterThan(0);
+    expect(
+      ResourceMonitorModel.sortProcessesByUsage(
+        [
+          { pid: 8, currentCpuPercent: 1.2, currentRssBytes: 64, gpuMemoryBytes: 2 },
+          { pid: 9, currentCpuPercent: 1.2, currentRssBytes: 64, gpuMemoryBytes: 40 },
+        ],
+        ResourceMonitorModel.historyProcessIntensity,
+      ).map((entry) => entry.pid),
+    ).toEqual([9, 8]);
+  });
+
+  it("sorts tree siblings by subtree intensity so heavy branches float up", () => {
+    const processes = [
+      process(10, 0, [11, 12], { cpuPercent: 1, rssBytes: 10 }),
+      process(11, 1, [13], { cpuPercent: 0.2, rssBytes: 4 }),
+      process(13, 2, [], { cpuPercent: 0.1, rssBytes: 2 }),
+      process(12, 1, [], { cpuPercent: 8, rssBytes: 3, gpuMemoryBytes: 16 }),
+      process(20, 0, [], { cpuPercent: 0.4, rssBytes: 1 }),
+    ];
+    expect(
+      ResourceMonitorModel.sortProcessTree(processes, {
+        depth: (entry) => entry.depth,
+        intensity: ResourceMonitorModel.liveProcessIntensity,
+      }).map((entry) => entry.pid),
+    ).toEqual([10, 12, 11, 13, 20]);
+    expect(
+      ResourceMonitorModel.displayedLiveProcesses(processes, "usage", new Set()).map(
+        (entry) => entry.pid,
+      ),
+    ).toEqual([12, 10, 20, 11, 13]);
+    expect(
+      ResourceMonitorModel.displayedHistoryProcesses(
+        [
+          historyProcess(1, 0, true, { currentCpuPercent: 2, currentRssBytes: 8 }),
+          historyProcess(2, 3, false, { currentCpuPercent: 0.2, currentRssBytes: 4 }),
+          historyProcess(3, 4, false, {
+            currentCpuPercent: 9,
+            currentRssBytes: 2,
+            gpuMemoryBytes: 32,
+          }),
+          historyProcess(4, 3, false, { currentCpuPercent: 1, currentRssBytes: 3 }),
+        ],
+        "tree",
+      ).map((entry) => entry.pid),
+    ).toEqual([1, 2, 3, 4]);
+  });
+
+  it("omits GPU from process stats when the server did not report it", () => {
+    expect(ResourceMonitorModel.formatProcessGpuMemory(undefined)).toBeNull();
+    expect(ResourceMonitorModel.formatProcessGpuMemory(0)).toBeNull();
+    expect(ResourceMonitorModel.formatProcessGpuMemory(2 * 1024 * 1024)).toBe("GPU 2.00 MB");
+    expect(
+      ResourceMonitorModel.historyProcessStats(
+        historyProcess(8, 1, false, { currentCpuPercent: 1, currentRssBytes: 1 }),
+      ),
+    ).not.toContain("GPU");
+    expect(
+      ResourceMonitorModel.historyProcessStats(
+        historyProcess(8, 1, false, {
+          currentCpuPercent: 1,
+          currentRssBytes: 1,
+          gpuMemoryBytes: 512 * 1024 * 1024,
+        }),
+      ),
+    ).toContain("GPU 512.0 MB");
+  });
 });
 
 function bucket(
@@ -250,18 +357,59 @@ function bucket(
   };
 }
 
-function process(pid: number, depth: number, childPids: readonly number[]) {
+function process(
+  pid: number,
+  depth: number,
+  childPids: readonly number[],
+  extras?: {
+    readonly cpuPercent?: number;
+    readonly rssBytes?: number;
+    readonly gpuMemoryBytes?: number;
+  },
+) {
   return {
     pid,
     startTimeMs: 1,
     ppid: 1,
     pgid: Option.none(),
     status: "running",
-    cpuPercent: 1,
-    rssBytes: 1,
+    cpuPercent: extras?.cpuPercent ?? 1,
+    rssBytes: extras?.rssBytes ?? 1,
+    ...(extras?.gpuMemoryBytes === undefined ? {} : { gpuMemoryBytes: extras.gpuMemoryBytes }),
     elapsed: "0:01",
     command: `proc-${pid}`,
     depth,
     childPids,
+  };
+}
+
+function historyProcess(
+  pid: number,
+  depth: number,
+  isServerRoot: boolean,
+  extras: {
+    readonly currentCpuPercent: number;
+    readonly currentRssBytes: number;
+    readonly gpuMemoryBytes?: number;
+  },
+) {
+  const now = DateTime.makeUnsafe("2026-11-01T00:00:00.000Z");
+  return {
+    processKey: `${pid}:1`,
+    pid,
+    ppid: 1,
+    command: `proc-${pid}`,
+    depth,
+    isServerRoot,
+    firstSeenAt: now,
+    lastSeenAt: now,
+    currentCpuPercent: extras.currentCpuPercent,
+    avgCpuPercent: extras.currentCpuPercent,
+    maxCpuPercent: extras.currentCpuPercent,
+    cpuSecondsApprox: 1,
+    currentRssBytes: extras.currentRssBytes,
+    maxRssBytes: extras.currentRssBytes,
+    ...(extras.gpuMemoryBytes === undefined ? {} : { gpuMemoryBytes: extras.gpuMemoryBytes }),
+    sampleCount: 1,
   };
 }

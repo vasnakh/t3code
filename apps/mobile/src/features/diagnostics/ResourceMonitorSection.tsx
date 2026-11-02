@@ -25,6 +25,7 @@ export function ResourceMonitorSection(props: {
   readonly environmentLabel?: string;
 }) {
   const monitor = useResourceMonitor(props.environmentId);
+  const [layoutMode, setLayoutMode] = useState<ResourceMonitorModel.ProcessLayoutMode>("usage");
   if (props.environmentId === null) {
     return (
       <SettingsSection title="Resource monitor">
@@ -51,6 +52,7 @@ export function ResourceMonitorSection(props: {
     diagnostics: processes,
     history,
   });
+  const layoutControl = <ProcessLayoutControl layout={layoutMode} onChange={setLayoutMode} />;
 
   return (
     <View className="gap-6">
@@ -107,6 +109,8 @@ export function ResourceMonitorSection(props: {
           loading={monitor.history.isPending && history === null}
         />
         <TopProcessList
+          layout={layoutMode}
+          onLayoutChange={setLayoutMode}
           processes={history?.topProcesses ?? []}
           emptyLabel={
             monitor.history.isPending && history === null
@@ -116,8 +120,13 @@ export function ResourceMonitorSection(props: {
         />
       </SettingsSection>
 
-      <SettingsSection title="Live processes">
+      <SettingsSection
+        title="Live processes"
+        trailing={layoutControl}
+        footer="Usage ranks every process by current CPU, then memory, then GPU. Tree keeps parent and child rows together, with heavier branches first."
+      >
         <ProcessTree
+          layout={layoutMode}
           processes={processes?.processes ?? []}
           emptyLabel={
             monitor.processes.isPending && processes === null
@@ -416,7 +425,23 @@ function HistoryChart(props: {
   );
 }
 
+function ProcessLayoutControl(props: {
+  readonly layout: ResourceMonitorModel.ProcessLayoutMode;
+  readonly onChange: (layout: ResourceMonitorModel.ProcessLayoutMode) => void;
+}) {
+  return (
+    <SegmentedControl
+      size="compact"
+      selected={props.layout}
+      onSelect={props.onChange}
+      options={ResourceMonitorModel.PROCESS_LAYOUT_OPTIONS}
+    />
+  );
+}
+
 function TopProcessList(props: {
+  readonly layout: ResourceMonitorModel.ProcessLayoutMode;
+  readonly onLayoutChange: (layout: ResourceMonitorModel.ProcessLayoutMode) => void;
   readonly processes: ReadonlyArray<ServerProcessResourceHistorySummary>;
   readonly emptyLabel: string;
 }) {
@@ -424,25 +449,43 @@ function TopProcessList(props: {
     return <EmptyCopy detail={props.emptyLabel} />;
   }
   const shallowest = ResourceMonitorModel.shallowestChildDepth(props.processes);
+  const rows = ResourceMonitorModel.displayedHistoryProcesses(props.processes, props.layout);
   return (
     <View>
-      {props.processes.map((process, index) => {
+      <View className="items-end border-b border-border-subtle px-4 py-2">
+        <ProcessLayoutControl layout={props.layout} onChange={props.onLayoutChange} />
+      </View>
+      {rows.map((process, index) => {
         const name = ResourceMonitorModel.formatProcessName(process.command);
+        const visualDepth =
+          props.layout === "tree"
+            ? ResourceMonitorModel.historyVisualDepth(process, shallowest)
+            : 0;
+        const depthLabel =
+          props.layout === "tree" ? ResourceMonitorModel.processDepthLabel(visualDepth) : null;
         return (
           <View
             key={process.processKey}
+            accessibilityLabel={`history-process ${process.pid}`}
             className={cn("gap-1 px-4 py-3", index > 0 && "border-t border-border-subtle")}
             style={{
-              paddingLeft: 16 + ResourceMonitorModel.historyVisualDepth(process, shallowest) * 12,
+              paddingLeft: 16 + ResourceMonitorModel.processRowIndent(visualDepth),
             }}
           >
             <View className="flex-row items-baseline justify-between gap-3">
-              <Text className="min-w-0 flex-1 text-base text-foreground" numberOfLines={1}>
-                {name}
-              </Text>
+              <View className="min-w-0 flex-1 flex-row items-baseline gap-1.5">
+                {depthLabel ? (
+                  <Text className="shrink-0 text-xs font-t3-medium tabular-nums text-foreground-muted">
+                    {depthLabel}
+                  </Text>
+                ) : null}
+                <Text className="min-w-0 flex-1 text-base text-foreground" numberOfLines={1}>
+                  {name}
+                </Text>
+              </View>
               <Text
                 className={cn(
-                  "text-sm font-t3-medium tabular-nums",
+                  "shrink-0 text-sm font-t3-medium tabular-nums",
                   ResourceMonitorModel.loadTextClass(
                     ResourceMonitorModel.loadTone(process.currentCpuPercent),
                   ),
@@ -451,11 +494,8 @@ function TopProcessList(props: {
                 {ResourceMonitorModel.formatPercent(process.currentCpuPercent)}
               </Text>
             </View>
-            <Text className="text-xs text-foreground-muted" numberOfLines={1}>
-              {process.isServerRoot ? "Root" : "Child"} · PID {process.pid} · peak{" "}
-              {ResourceMonitorModel.formatPercent(process.maxCpuPercent)} ·{" "}
-              {ResourceMonitorModel.formatBytes(process.maxRssBytes)} ·{" "}
-              {ResourceMonitorModel.formatCpuTime(process.cpuSecondsApprox)}
+            <Text className="text-xs text-foreground-muted">
+              {ResourceMonitorModel.historyProcessStats(process)}
             </Text>
           </View>
         );
@@ -465,11 +505,16 @@ function TopProcessList(props: {
 }
 
 function ProcessTree(props: {
+  readonly layout: ResourceMonitorModel.ProcessLayoutMode;
   readonly processes: ReadonlyArray<ServerProcessDiagnosticsEntry>;
   readonly emptyLabel: string;
 }) {
   const [collapsedPids, setCollapsedPids] = useState<ReadonlySet<number>>(() => new Set());
-  const visible = ResourceMonitorModel.visibleProcessTree(props.processes, collapsedPids);
+  const visible = ResourceMonitorModel.displayedLiveProcesses(
+    props.processes,
+    props.layout,
+    collapsedPids,
+  );
   if (props.processes.length === 0) {
     return <EmptyCopy detail={props.emptyLabel} />;
   }
@@ -488,16 +533,21 @@ function ProcessTree(props: {
       {visible.map((process, index) => {
         const name = ResourceMonitorModel.formatProcessName(process.command);
         const expanded = !collapsedPids.has(process.pid);
+        const tree = props.layout === "tree";
+        const depthLabel = tree ? ResourceMonitorModel.processDepthLabel(process.depth) : null;
         return (
           <View
             key={process.pid}
+            accessibilityLabel={`live-process ${process.pid}`}
             className={cn(
               "flex-row items-start gap-2 px-3 py-3",
               index > 0 && "border-t border-border-subtle",
             )}
-            style={{ paddingLeft: 12 + Math.min(process.depth, 6) * 12 }}
+            style={{
+              paddingLeft: 12 + (tree ? ResourceMonitorModel.processRowIndent(process.depth) : 0),
+            }}
           >
-            {process.childPids.length > 0 ? (
+            {tree && process.childPids.length > 0 ? (
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={expanded ? `Collapse ${name}` : `Expand ${name}`}
@@ -517,12 +567,19 @@ function ProcessTree(props: {
             )}
             <View className="min-w-0 flex-1 gap-0.5">
               <View className="flex-row items-baseline justify-between gap-3">
-                <Text className="min-w-0 flex-1 text-base text-foreground" numberOfLines={1}>
-                  {name}
-                </Text>
+                <View className="min-w-0 flex-1 flex-row items-baseline gap-1.5">
+                  {depthLabel ? (
+                    <Text className="shrink-0 text-xs font-t3-medium tabular-nums text-foreground-muted">
+                      {depthLabel}
+                    </Text>
+                  ) : null}
+                  <Text className="min-w-0 flex-1 text-base text-foreground" numberOfLines={1}>
+                    {name}
+                  </Text>
+                </View>
                 <Text
                   className={cn(
-                    "text-sm font-t3-medium tabular-nums",
+                    "shrink-0 text-sm font-t3-medium tabular-nums",
                     ResourceMonitorModel.loadTextClass(
                       ResourceMonitorModel.loadTone(process.cpuPercent),
                     ),
@@ -531,9 +588,8 @@ function ProcessTree(props: {
                   {ResourceMonitorModel.formatPercent(process.cpuPercent)}
                 </Text>
               </View>
-              <Text className="text-xs text-foreground-muted" numberOfLines={1}>
-                {ResourceMonitorModel.formatProcessType(process)} · PID {process.pid} ·{" "}
-                {ResourceMonitorModel.formatBytes(process.rssBytes)} · {process.elapsed}
+              <Text className="text-xs text-foreground-muted">
+                {ResourceMonitorModel.liveProcessStats(process)}
               </Text>
             </View>
           </View>

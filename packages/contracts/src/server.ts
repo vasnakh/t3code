@@ -436,6 +436,7 @@ export const ServerProcessDiagnosticsEntry = Schema.Struct({
   status: TrimmedNonEmptyString,
   cpuPercent: Schema.Number,
   rssBytes: NonNegativeInt,
+  gpuMemoryBytes: Schema.optionalKey(NonNegativeInt),
   elapsed: TrimmedNonEmptyString,
   command: TrimmedNonEmptyString,
   depth: NonNegativeInt,
@@ -489,6 +490,7 @@ export const ServerProcessResourceHistorySummary = Schema.Struct({
   cpuSecondsApprox: Schema.Number,
   currentRssBytes: NonNegativeInt,
   maxRssBytes: NonNegativeInt,
+  gpuMemoryBytes: Schema.optionalKey(NonNegativeInt),
   sampleCount: NonNegativeInt,
 });
 export type ServerProcessResourceHistorySummary = typeof ServerProcessResourceHistorySummary.Type;

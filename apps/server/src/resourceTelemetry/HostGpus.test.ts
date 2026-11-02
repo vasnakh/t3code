@@ -2,8 +2,11 @@ import { describe, expect, it } from "@effect/vitest";
 
 import {
   amdSysfsCardIds,
+  attachGpuMemory,
+  mergeProcessGpuMemory,
   parseAmdSysfsCard,
   parseNvidiaSmiCsv,
+  parseNvidiaSmiProcessMemory,
   parseOptionalBytes,
   parseOptionalNumber,
   withHostGpus,
@@ -113,6 +116,60 @@ NVIDIA Graphics Device, [N/A], [N/A], [N/A]
         },
       ]).gpus,
     ).toHaveLength(1);
+  });
+
+  it("parses nvidia-smi process memory and sums the same pid", () => {
+    expect(
+      [
+        ...parseNvidiaSmiProcessMemory(`
+1234, 256
+1234, 128
+5678, 32
+n/a, 12
+0, 64
+[N/A], [N/A]
+`).entries(),
+      ].toSorted(([left], [right]) => left - right),
+    ).toEqual([
+      [1234, (256 + 128) * 1024 * 1024],
+      [5678, 32 * 1024 * 1024],
+    ]);
+    expect(parseNvidiaSmiProcessMemory("").size).toBe(0);
+    expect(parseNvidiaSmiProcessMemory("1234").size).toBe(0);
+  });
+
+  it("merges compute and graphics pid maps and attaches only positive samples", () => {
+    expect(
+      [
+        ...mergeProcessGpuMemory([
+          new Map([
+            [1, 100],
+            [2, 50],
+          ]),
+          new Map([
+            [1, 25],
+            [3, 10],
+          ]),
+        ]).entries(),
+      ].toSorted(([left], [right]) => left - right),
+    ).toEqual([
+      [1, 125],
+      [2, 50],
+      [3, 10],
+    ]);
+    expect(attachGpuMemory({ pid: 1, command: "python" }, new Map([[1, 4096]]))).toEqual({
+      pid: 1,
+      command: "python",
+      gpuMemoryBytes: 4096,
+    });
+    expect(attachGpuMemory({ pid: 2, command: "node" }, new Map([[1, 4096]]))).toEqual({
+      pid: 2,
+      command: "node",
+    });
+    expect(attachGpuMemory({ pid: 1, command: "idle" }, new Map([[1, 0]]))).toEqual({
+      pid: 1,
+      command: "idle",
+    });
   });
 
   it("rejects non-numeric and non-integer byte strings", () => {

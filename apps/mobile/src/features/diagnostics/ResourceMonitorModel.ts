@@ -304,3 +304,205 @@ export function shallowestChildDepth(
     return minDepth === null ? process.depth : Math.min(minDepth, process.depth);
   }, null);
 }
+
+export type ProcessLayoutMode = "usage" | "tree";
+
+export const PROCESS_LAYOUT_OPTIONS: ReadonlyArray<{
+  readonly value: ProcessLayoutMode;
+  readonly label: string;
+}> = [
+  { value: "usage", label: "Usage" },
+  { value: "tree", label: "Tree" },
+];
+
+export const PROCESS_ROW_INDENT_STEP = 8;
+export const PROCESS_ROW_INDENT_MAX_DEPTH = 2;
+
+export function processRowIndent(depth: number): number {
+  if (!Number.isFinite(depth) || depth <= 0) return 0;
+  return Math.min(depth, PROCESS_ROW_INDENT_MAX_DEPTH) * PROCESS_ROW_INDENT_STEP;
+}
+
+export function processDepthLabel(depth: number): string | null {
+  if (!Number.isFinite(depth) || depth <= PROCESS_ROW_INDENT_MAX_DEPTH) return null;
+  return `d${Math.floor(depth)}`;
+}
+
+export function formatProcessGpuMemory(gpuMemoryBytes: number | undefined): string | null {
+  if (gpuMemoryBytes === undefined || gpuMemoryBytes <= 0) return null;
+  return `GPU ${formatBytes(gpuMemoryBytes)}`;
+}
+
+export interface ProcessIntensityKey {
+  readonly pid: number;
+  readonly cpuPercent: number;
+  readonly rssBytes: number;
+  readonly gpuMemoryBytes?: number;
+}
+
+export function liveProcessIntensity(
+  process: Pick<
+    ServerProcessDiagnosticsEntry,
+    "pid" | "cpuPercent" | "rssBytes" | "gpuMemoryBytes"
+  >,
+): ProcessIntensityKey {
+  return {
+    pid: process.pid,
+    cpuPercent: process.cpuPercent,
+    rssBytes: process.rssBytes,
+    gpuMemoryBytes: process.gpuMemoryBytes,
+  };
+}
+
+export function historyProcessIntensity(
+  process: Pick<
+    ServerProcessResourceHistorySummary,
+    "pid" | "currentCpuPercent" | "currentRssBytes" | "gpuMemoryBytes"
+  >,
+): ProcessIntensityKey {
+  return {
+    pid: process.pid,
+    cpuPercent: process.currentCpuPercent,
+    rssBytes: process.currentRssBytes,
+    gpuMemoryBytes: process.gpuMemoryBytes,
+  };
+}
+
+export function compareProcessIntensity(
+  left: ProcessIntensityKey,
+  right: ProcessIntensityKey,
+): number {
+  if (right.cpuPercent !== left.cpuPercent) return right.cpuPercent - left.cpuPercent;
+  if (right.rssBytes !== left.rssBytes) return right.rssBytes - left.rssBytes;
+  const leftGpu = left.gpuMemoryBytes ?? 0;
+  const rightGpu = right.gpuMemoryBytes ?? 0;
+  if (rightGpu !== leftGpu) return rightGpu - leftGpu;
+  return left.pid - right.pid;
+}
+
+export function sortProcessesByUsage<T>(
+  processes: ReadonlyArray<T>,
+  intensity: (process: T) => ProcessIntensityKey,
+): T[] {
+  return [...processes].sort((left, right) =>
+    compareProcessIntensity(intensity(left), intensity(right)),
+  );
+}
+
+type ProcessTreeNode<T> = {
+  readonly process: T;
+  readonly children: ProcessTreeNode<T>[];
+};
+
+function forestFromDepth<T>(
+  processes: ReadonlyArray<T>,
+  depthOf: (process: T) => number,
+): ProcessTreeNode<T>[] {
+  const roots: ProcessTreeNode<T>[] = [];
+  const stack: ProcessTreeNode<T>[] = [];
+  for (const process of processes) {
+    const node: ProcessTreeNode<T> = { process, children: [] };
+    const depth = depthOf(process);
+    while (stack.length > 0 && depthOf(stack[stack.length - 1]!.process) >= depth) {
+      stack.pop();
+    }
+    const parent = stack[stack.length - 1];
+    if (parent) parent.children.push(node);
+    else roots.push(node);
+    stack.push(node);
+  }
+  return roots;
+}
+
+function subtreeIntensity<T>(
+  node: ProcessTreeNode<T>,
+  intensity: (process: T) => ProcessIntensityKey,
+): ProcessIntensityKey {
+  const self = intensity(node.process);
+  let cpuPercent = self.cpuPercent;
+  let rssBytes = self.rssBytes;
+  let gpuMemoryBytes = self.gpuMemoryBytes ?? 0;
+  for (const child of node.children) {
+    const childIntensity = subtreeIntensity(child, intensity);
+    cpuPercent = Math.max(cpuPercent, childIntensity.cpuPercent);
+    rssBytes += childIntensity.rssBytes;
+    gpuMemoryBytes += childIntensity.gpuMemoryBytes ?? 0;
+  }
+  return { pid: self.pid, cpuPercent, rssBytes, gpuMemoryBytes };
+}
+
+function flattenSortedTree<T>(
+  nodes: ReadonlyArray<ProcessTreeNode<T>>,
+  intensity: (process: T) => ProcessIntensityKey,
+): T[] {
+  const sorted = [...nodes].sort((left, right) =>
+    compareProcessIntensity(subtreeIntensity(left, intensity), subtreeIntensity(right, intensity)),
+  );
+  const flattened: T[] = [];
+  for (const node of sorted) {
+    flattened.push(node.process);
+    flattened.push(...flattenSortedTree(node.children, intensity));
+  }
+  return flattened;
+}
+
+export function sortProcessTree<T>(
+  processes: ReadonlyArray<T>,
+  input: {
+    readonly depth: (process: T) => number;
+    readonly intensity: (process: T) => ProcessIntensityKey;
+  },
+): T[] {
+  return flattenSortedTree(forestFromDepth(processes, input.depth), input.intensity);
+}
+
+export function displayedLiveProcesses(
+  processes: ReadonlyArray<ServerProcessDiagnosticsEntry>,
+  layout: ProcessLayoutMode,
+  collapsedPids: ReadonlySet<number>,
+): ReadonlyArray<ServerProcessDiagnosticsEntry> {
+  if (layout === "usage") return sortProcessesByUsage(processes, liveProcessIntensity);
+  return visibleProcessTree(
+    sortProcessTree(processes, {
+      depth: (process) => process.depth,
+      intensity: liveProcessIntensity,
+    }),
+    collapsedPids,
+  );
+}
+
+export function displayedHistoryProcesses(
+  processes: ReadonlyArray<ServerProcessResourceHistorySummary>,
+  layout: ProcessLayoutMode,
+): ReadonlyArray<ServerProcessResourceHistorySummary> {
+  if (layout === "usage") return sortProcessesByUsage(processes, historyProcessIntensity);
+  return sortProcessTree(processes, {
+    depth: (process) => process.depth,
+    intensity: historyProcessIntensity,
+  });
+}
+
+export function liveProcessStats(process: ServerProcessDiagnosticsEntry): string {
+  return [
+    formatProcessType(process),
+    `PID ${process.pid}`,
+    formatBytes(process.rssBytes),
+    formatProcessGpuMemory(process.gpuMemoryBytes),
+    process.elapsed,
+  ]
+    .filter((part) => part != null)
+    .join(" · ");
+}
+
+export function historyProcessStats(process: ServerProcessResourceHistorySummary): string {
+  return [
+    process.isServerRoot ? "Root" : "Child",
+    `PID ${process.pid}`,
+    `peak ${formatPercent(process.maxCpuPercent)}`,
+    formatBytes(process.maxRssBytes),
+    formatProcessGpuMemory(process.gpuMemoryBytes),
+    formatCpuTime(process.cpuSecondsApprox),
+  ]
+    .filter((part) => part != null)
+    .join(" · ");
+}

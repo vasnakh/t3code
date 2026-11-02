@@ -1,4 +1,7 @@
 import type { HostGpuSnapshot, HostResourcesSnapshot } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 const AMD_SYSFS_VENDOR = "0x1002";
 const MISSING = /^(?:\[?n\/a\]?|-)$/i;
@@ -94,6 +97,76 @@ export function parseAmdSysfsCard(files: {
     memoryTotalBytes,
   };
 }
+
+export function parseNvidiaSmiProcessMemory(output: string): Map<number, number> {
+  const byPid = new Map<number, number>();
+  for (const line of output.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed === "") continue;
+    const fields = splitCsvLine(trimmed);
+    if (fields.length < 2) continue;
+    const pid = parseOptionalNumber(fields[0] ?? "");
+    const memoryMib = parseOptionalNumber(fields[1] ?? "");
+    if (
+      pid === null ||
+      memoryMib === null ||
+      pid <= 0 ||
+      memoryMib < 0 ||
+      !Number.isSafeInteger(pid)
+    ) {
+      continue;
+    }
+    byPid.set(pid, (byPid.get(pid) ?? 0) + mibToBytes(memoryMib));
+  }
+  return byPid;
+}
+
+export function mergeProcessGpuMemory(
+  maps: ReadonlyArray<ReadonlyMap<number, number>>,
+): Map<number, number> {
+  const merged = new Map<number, number>();
+  for (const map of maps) {
+    for (const [pid, bytes] of map) {
+      merged.set(pid, (merged.get(pid) ?? 0) + bytes);
+    }
+  }
+  return merged;
+}
+
+export function attachGpuMemory<T extends { readonly pid: number }>(
+  entry: T,
+  byPid: ReadonlyMap<number, number>,
+): T {
+  const gpuMemoryBytes = byPid.get(entry.pid);
+  return gpuMemoryBytes === undefined || gpuMemoryBytes <= 0 ? entry : { ...entry, gpuMemoryBytes };
+}
+
+function nvidiaSmiCsv(spawner: ChildProcessSpawner.ChildProcessSpawner["Service"], query: string) {
+  return spawner
+    .string(
+      ChildProcess.make("nvidia-smi", [query, "--format=csv,noheader,nounits"], {
+        stdin: "ignore",
+        stderr: "ignore",
+      }),
+    )
+    .pipe(
+      Effect.timeout("2 seconds"),
+      Effect.orElseSucceed(() => ""),
+    );
+}
+
+export const collectNvidiaProcessGpuMemory = Effect.fn("HostResources.collectProcessGpu")(
+  function* () {
+    const spawner = yield* Effect.serviceOption(ChildProcessSpawner.ChildProcessSpawner);
+    if (Option.isNone(spawner)) return new Map<number, number>();
+    const compute = yield* nvidiaSmiCsv(spawner.value, "--query-compute-apps=pid,used_memory");
+    const graphics = yield* nvidiaSmiCsv(spawner.value, "--query-graphics-apps=pid,used_memory");
+    return mergeProcessGpuMemory([
+      parseNvidiaSmiProcessMemory(compute),
+      parseNvidiaSmiProcessMemory(graphics),
+    ]);
+  },
+);
 
 export function withHostGpus(
   snapshot: Omit<HostResourcesSnapshot, "gpus">,
