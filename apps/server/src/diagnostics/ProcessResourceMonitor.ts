@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
+import { attachGpuMemory, collectNvidiaProcessGpuMemory } from "../resourceTelemetry/HostGpus.ts";
 import * as ResourceTelemetry from "../resourceTelemetry/ResourceTelemetry.ts";
 
 export class ProcessResourceMonitor extends Context.Service<
@@ -31,12 +32,16 @@ function isLegacyBackendCategory(category: ResourceTelemetryProcessCategory): bo
 /** @public */
 export const make = Effect.fn("makeProcessResourceMonitor")(function* () {
   const telemetry = yield* ResourceTelemetry.ResourceTelemetry;
-  const readHistory: ProcessResourceMonitor["Service"]["readHistory"] = (input) =>
-    telemetry.readHistory(input).pipe(
-      Effect.map((history) => {
-        const topProcesses = history.topProcesses
-          .filter((entry) => isLegacyBackendCategory(entry.category))
-          .map((entry) => ({
+  const readHistory = Effect.fn("ProcessResourceMonitor.readHistory")(function* (
+    input: ServerProcessResourceHistoryInput,
+  ) {
+    const history = yield* telemetry.readHistory(input);
+    const gpuByPid = yield* collectNvidiaProcessGpuMemory();
+    const topProcesses = history.topProcesses
+      .filter((entry) => isLegacyBackendCategory(entry.category))
+      .map((entry) =>
+        attachGpuMemory(
+          {
             processKey: `${entry.identity.pid}:${entry.identity.startTimeMs}`,
             pid: entry.identity.pid,
             ppid: entry.ppid,
@@ -52,35 +57,37 @@ export const make = Effect.fn("makeProcessResourceMonitor")(function* () {
             currentRssBytes: entry.currentRssBytes,
             maxRssBytes: entry.peakRssBytes,
             sampleCount: entry.sampleCount,
-          }));
-        return {
-          readAt: history.readAt,
-          windowMs: history.windowMs,
-          bucketMs: history.bucketMs,
-          sampleIntervalMs: history.sampleIntervalMs,
-          retainedSampleCount: history.retainedSampleCount,
-          totalCpuSecondsApprox: topProcesses.reduce(
-            (total, entry) => total + entry.cpuSecondsApprox,
-            0,
-          ),
-          buckets: (history.legacyBackendBuckets ?? history.buckets).map((bucket) => ({
-            startedAt: bucket.startedAt,
-            endedAt: bucket.endedAt,
-            avgCpuPercent: bucket.avgCpuPercent,
-            maxCpuPercent: bucket.maxCpuPercent,
-            maxRssBytes: bucket.maxRssBytes,
-            maxProcessCount: bucket.maxProcessCount,
-          })),
-          topProcesses,
-          error: history.health.native.lastError.pipe(
-            Option.map((message) => ({
-              failureTag: "ProcessDiagnosticsQueryFailedError" as const,
-              message,
-            })),
-          ),
-        };
-      }),
-    );
+          },
+          gpuByPid,
+        ),
+      );
+    return {
+      readAt: history.readAt,
+      windowMs: history.windowMs,
+      bucketMs: history.bucketMs,
+      sampleIntervalMs: history.sampleIntervalMs,
+      retainedSampleCount: history.retainedSampleCount,
+      totalCpuSecondsApprox: topProcesses.reduce(
+        (total, entry) => total + entry.cpuSecondsApprox,
+        0,
+      ),
+      buckets: (history.legacyBackendBuckets ?? history.buckets).map((bucket) => ({
+        startedAt: bucket.startedAt,
+        endedAt: bucket.endedAt,
+        avgCpuPercent: bucket.avgCpuPercent,
+        maxCpuPercent: bucket.maxCpuPercent,
+        maxRssBytes: bucket.maxRssBytes,
+        maxProcessCount: bucket.maxProcessCount,
+      })),
+      topProcesses,
+      error: history.health.native.lastError.pipe(
+        Option.map((message) => ({
+          failureTag: "ProcessDiagnosticsQueryFailedError" as const,
+          message,
+        })),
+      ),
+    };
+  });
 
   return ProcessResourceMonitor.of({ readHistory });
 });

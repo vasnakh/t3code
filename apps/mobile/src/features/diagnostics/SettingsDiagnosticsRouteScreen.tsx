@@ -17,14 +17,20 @@ import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { crashReportingAvailable, setCrashReportsEnabled } from "../observability/observe";
 import { ListActionRow as SettingsActionRow } from "../../components/ui/ListActionRow";
+import {
+  AndroidSettingsEnvironmentFilter,
+  SettingsEnvironmentFilterHeader,
+} from "../settings/components/SettingsEnvironmentFilterHeader";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { SettingsSection } from "../settings/components/SettingsSection";
 import { SettingsSwitchRow } from "../settings/components/SettingsSwitchRow";
+import { useSettingsEnvironmentFilter } from "../settings/settings-environment-filter";
 import {
   formatStartupCrashReport,
   parseStartupCrashRecords,
   type StartupCrashRecord,
 } from "./crash-log-model";
+import { ResourceMonitorSection } from "./ResourceMonitorSection";
 
 // expo-updates retains only seven days of logs.
 const LOG_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -72,6 +78,8 @@ export function SettingsDiagnosticsRouteScreen() {
   const insets = useSafeAreaInsets();
   const state = useCrashLogState();
   const [copied, setCopied] = useState(false);
+  const { selectedTargets } = useSettingsEnvironmentFilter();
+  const environment = selectedTargets[0] ?? null;
 
   const records = state.status === "ready" ? state.records : [];
   const copyReport = async () => {
@@ -82,58 +90,68 @@ export function SettingsDiagnosticsRouteScreen() {
   };
 
   return (
-    <SettingsScreen title="Diagnostics">
-      <ScrollView
-        contentInsetAdjustmentBehavior="automatic"
-        contentInset={{ bottom: Math.max(insets.bottom, 18) }}
-        showsVerticalScrollIndicator={false}
-        className="flex-1"
-        contentContainerClassName="gap-6 px-5 pt-4 pb-[18px]"
-      >
-        {crashReportingAvailable ? <CrashReportsSetting /> : null}
+    <>
+      <SettingsEnvironmentFilterHeader />
+      <SettingsScreen title="Diagnostics" trailing={<AndroidSettingsEnvironmentFilter />}>
+        <ScrollView
+          contentInsetAdjustmentBehavior="automatic"
+          contentInset={{ bottom: Math.max(insets.bottom, 18) }}
+          showsVerticalScrollIndicator={false}
+          className="flex-1"
+          contentContainerClassName="gap-6 px-5 pt-4 pb-[18px]"
+        >
+          <ResourceMonitorSection
+            environmentId={environment?.environmentId ?? null}
+            environmentLabel={environment?.label}
+          />
 
-        <SettingsSection title="Startup crashes">
-          {state.status === "loading" ? (
-            <View className="items-center gap-3 px-6 py-8">
-              <AppActivityIndicator />
-              <Text className="text-center text-sm text-foreground-muted">Reading crash log…</Text>
-            </View>
-          ) : state.status === "unavailable" ? (
-            <EmptyState
-              icon="exclamationmark.triangle"
-              title="Crash log unavailable"
-              detail="Startup crash records are only kept in store and TestFlight builds."
-            />
-          ) : records.length === 0 ? (
-            <EmptyState
-              icon="checkmark.circle"
-              title="No startup crashes"
-              detail="Nothing has taken the app down during launch in the last 7 days."
-            />
-          ) : (
-            records.map((record, index) => (
-              <CrashRow key={record.timestamp} record={record} first={index === 0} />
-            ))
-          )}
-        </SettingsSection>
+          {crashReportingAvailable ? <CrashReportsSetting /> : null}
 
-        <View className="gap-3">
-          <SettingsSection title="Actions">
-            <SettingsActionRow
-              icon={copied ? "checkmark" : "doc.on.doc"}
-              label={copied ? "Copied" : "Copy crash report"}
-              disabled={state.status !== "ready"}
-              onPress={() => void copyReport()}
-            />
+          <SettingsSection title="Startup crashes">
+            {state.status === "loading" ? (
+              <View className="items-center gap-3 px-6 py-8">
+                <AppActivityIndicator />
+                <Text className="text-center text-sm text-foreground-muted">
+                  Reading crash log…
+                </Text>
+              </View>
+            ) : state.status === "unavailable" ? (
+              <EmptyState
+                icon="exclamationmark.triangle"
+                title="Crash log unavailable"
+                detail="Startup crash records are only kept in store and TestFlight builds."
+              />
+            ) : records.length === 0 ? (
+              <EmptyState
+                icon="checkmark.circle"
+                title="No startup crashes"
+                detail="Nothing has taken the app down during launch in the last 7 days."
+              />
+            ) : (
+              records.map((record, index) => (
+                <CrashRow key={record.timestamp} record={record} first={index === 0} />
+              ))
+            )}
           </SettingsSection>
-          <Text className="px-2 text-sm leading-normal text-foreground-muted">
-            Paste the report into a GitHub issue. It contains the app version, the JavaScript error
-            message, and the component stack. Error messages can quote values from the app, so read
-            it over before sharing.
-          </Text>
-        </View>
-      </ScrollView>
-    </SettingsScreen>
+
+          <View className="gap-3">
+            <SettingsSection title="Actions">
+              <SettingsActionRow
+                icon={copied ? "checkmark" : "doc.on.doc"}
+                label={copied ? "Copied" : "Copy crash report"}
+                disabled={state.status !== "ready"}
+                onPress={() => void copyReport()}
+              />
+            </SettingsSection>
+            <Text className="px-2 text-sm leading-normal text-foreground-muted">
+              Paste the report into a GitHub issue. It contains the app version, the JavaScript
+              error message, and the component stack. Error messages can quote values from the app,
+              so read it over before sharing.
+            </Text>
+          </View>
+        </ScrollView>
+      </SettingsScreen>
+    </>
   );
 }
 

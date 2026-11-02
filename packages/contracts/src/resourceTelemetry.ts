@@ -6,12 +6,21 @@ import { DesktopUpdateChannelSchema, DesktopUpdateStateSchema } from "./ipc.ts";
 
 export const RESOURCE_MONITOR_PROTOCOL_VERSION = 3 as const;
 
+export const HostGpuSnapshot = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  utilization: Schema.NullOr(Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 }))),
+  memoryUsedBytes: Schema.NullOr(NonNegativeInt),
+  memoryTotalBytes: Schema.NullOr(NonNegativeInt),
+});
+export type HostGpuSnapshot = typeof HostGpuSnapshot.Type;
+
 export const HostResourcesSnapshot = Schema.Struct({
   sampledAt: NonNegativeInt,
   cpuUtilization: Schema.NullOr(Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 }))),
   cpuCount: NonNegativeInt,
   availableMemoryBytes: NonNegativeInt,
   totalMemoryBytes: NonNegativeInt,
+  gpus: Schema.optionalKey(Schema.Array(HostGpuSnapshot)),
 });
 export type HostResourcesSnapshot = typeof HostResourcesSnapshot.Type;
 

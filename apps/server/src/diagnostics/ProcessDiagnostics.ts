@@ -11,6 +11,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import { attachGpuMemory, collectNvidiaProcessGpuMemory } from "../resourceTelemetry/HostGpus.ts";
 import * as ResourceTelemetry from "../resourceTelemetry/ResourceTelemetry.ts";
 
 export class ProcessSignalFailed extends Schema.TaggedError<ProcessSignalFailed>()(
@@ -58,34 +59,39 @@ function canSignalCategory(category: ResourceTelemetryProcessCategory): boolean 
 export const make = Effect.fn("makeProcessDiagnostics")(function* () {
   const telemetry = yield* ResourceTelemetry.ResourceTelemetry;
   const refreshedTelemetry = telemetry.refresh.pipe(Effect.catch(() => telemetry.latest));
-  const read: ProcessDiagnostics["Service"]["read"] = refreshedTelemetry.pipe(
-    Effect.map((snapshot) => {
-      const processes = snapshot.processes
-        .filter((entry) => canSignalCategory(entry.category))
-        .map((entry): ServerProcessDiagnosticsEntry => ({
-          pid: entry.identity.pid,
-          startTimeMs: entry.identity.startTimeMs,
-          ppid: entry.ppid,
-          pgid: Option.none(),
-          status: entry.status || "Unknown",
-          cpuPercent: entry.cpuPercent,
-          rssBytes: entry.residentBytes,
-          elapsed: formatElapsed(entry.runTimeMs),
-          command: entry.command || entry.name || "unknown",
-          depth: Math.max(0, entry.depth - 1),
-          childPids: entry.childPids,
-        }));
-      return {
-        serverPid: process.pid,
-        readAt: snapshot.readAt,
-        processCount: processes.length,
-        totalRssBytes: processes.reduce((total, entry) => total + entry.rssBytes, 0),
-        totalCpuPercent: processes.reduce((total, entry) => total + entry.cpuPercent, 0),
-        processes,
-        error: Option.map(snapshot.health.native.lastError, (message) => ({ message })),
-      };
-    }),
-  );
+  const read: ProcessDiagnostics["Service"]["read"] = Effect.gen(function* () {
+    const snapshot = yield* refreshedTelemetry;
+    const gpuByPid = yield* collectNvidiaProcessGpuMemory();
+    const processes = snapshot.processes
+      .filter((entry) => canSignalCategory(entry.category))
+      .map((entry): ServerProcessDiagnosticsEntry =>
+        attachGpuMemory(
+          {
+            pid: entry.identity.pid,
+            startTimeMs: entry.identity.startTimeMs,
+            ppid: entry.ppid,
+            pgid: Option.none(),
+            status: entry.status || "Unknown",
+            cpuPercent: entry.cpuPercent,
+            rssBytes: entry.residentBytes,
+            elapsed: formatElapsed(entry.runTimeMs),
+            command: entry.command || entry.name || "unknown",
+            depth: Math.max(0, entry.depth - 1),
+            childPids: entry.childPids,
+          },
+          gpuByPid,
+        ),
+      );
+    return {
+      serverPid: process.pid,
+      readAt: snapshot.readAt,
+      processCount: processes.length,
+      totalRssBytes: processes.reduce((total, entry) => total + entry.rssBytes, 0),
+      totalCpuPercent: processes.reduce((total, entry) => total + entry.cpuPercent, 0),
+      processes,
+      error: Option.map(snapshot.health.native.lastError, (message) => ({ message })),
+    };
+  });
 
   const signal: ProcessDiagnostics["Service"]["signal"] = Effect.fn("ProcessDiagnostics.signal")(
     function* (input) {

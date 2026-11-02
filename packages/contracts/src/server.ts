@@ -23,6 +23,7 @@ import {
   ResolvedKeybindingsConfig,
 } from "./keybindings.ts";
 import { EditorId, FileManagerRevealKind, RemoteOpenTarget } from "./editor.ts";
+import { ManagedPolicySummary } from "./managedPolicy.ts";
 import { ModelCapabilities, ProviderOptionDescriptor } from "./model.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
@@ -435,6 +436,7 @@ export const ServerProcessDiagnosticsEntry = Schema.Struct({
   status: TrimmedNonEmptyString,
   cpuPercent: Schema.Number,
   rssBytes: NonNegativeInt,
+  gpuMemoryBytes: Schema.optionalKey(NonNegativeInt),
   elapsed: TrimmedNonEmptyString,
   command: TrimmedNonEmptyString,
   depth: NonNegativeInt,
@@ -488,6 +490,7 @@ export const ServerProcessResourceHistorySummary = Schema.Struct({
   cpuSecondsApprox: Schema.Number,
   currentRssBytes: NonNegativeInt,
   maxRssBytes: NonNegativeInt,
+  gpuMemoryBytes: Schema.optionalKey(NonNegativeInt),
   sampleCount: NonNegativeInt,
 });
 export type ServerProcessResourceHistorySummary = typeof ServerProcessResourceHistorySummary.Type;
@@ -620,6 +623,8 @@ export const ServerConfig = Schema.Struct({
   directEndpoints: Schema.optionalKey(ForwardCompatibleArray(ServerDirectEndpoint)),
   observability: ServerObservability,
   settings: ServerSettings,
+  /** Present when an administrator's policy file manages this environment. */
+  managedPolicy: Schema.optionalKey(ManagedPolicySummary),
   shellResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
   /**
    * The shell can leave idle subagent children out of snapshots (`omitIdleSubagents`), and
